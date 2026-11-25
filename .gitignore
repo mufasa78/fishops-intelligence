@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+data/
+*.db
+*.sqlite
+*.sqlite3
+fishops_candidates_*.csv
+*.csv
+*.egg-info/
+build/
+dist/
+.DS_Store
+uploads/
+*.log
+.streamlit/secrets.toml
+.streamlit/cache/
+# Never commit secrets
+.env
+*.env
