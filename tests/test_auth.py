@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from types import SimpleNamespace
 
 import pytest
@@ -55,6 +56,18 @@ def _configure_admin(monkeypatch):
     monkeypatch.setenv("FISHOPS_ADMIN_EMAIL_2", "njorogestan12@gmail.com")
     monkeypatch.setenv("SUPABASE_URL", "https://fishops.supabase.co")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "publishable-key")
+
+
+def test_auth_module_loads_without_sys_modules_registration():
+    module_spec = importlib.util.spec_from_file_location(
+        "fishops.auth_isolated",
+        auth.__file__,
+    )
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+
+    module_spec.loader.exec_module(module)
 
 
 def test_sign_in_uses_supabase_and_returns_per_user_session(monkeypatch):
@@ -126,9 +139,7 @@ def test_password_recovery_does_not_send_for_unlisted_email(monkeypatch):
     monkeypatch.setattr(
         auth,
         "create_client",
-        lambda *_args, **_kwargs: pytest.fail(
-            "Supabase should not be called for an unlisted email"
-        ),
+        lambda *_: pytest.fail("Supabase should not be called for an unlisted email"),
     )
 
     auth.send_password_recovery_email("outsider@example.com")
