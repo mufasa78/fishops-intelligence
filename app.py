@@ -7,12 +7,28 @@ Launch:
 
 from __future__ import annotations
 
+import time
+
+import httpx
 import pandas as pd
 import streamlit as st
+from supabase_auth.errors import AuthApiError
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
-from fishops.auth import current_user_email, get_authorized_administrator
+from fishops.auth import (
+    AuthenticatedSession,
+    Administrator,
+    SupabaseAuthConfigurationError,
+    SupabaseAuthSessionError,
+    UnauthorizedAdministratorError,
+    UnconfirmedEmailError,
+    get_authorized_administrator,
+    normalize_email,
+    refresh_authenticated_session,
+    sign_in_with_password,
+    sign_out_session,
+)
 from fishops.constants import (
     BUSINESS_TYPE_LABELS,
     PIPELINE_STAGE_LABELS,
@@ -33,6 +49,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+AUTH_SESSION_KEY = "fishops_auth_session"
+LOGIN_EMAIL_KEY = "fishops_login_email"
+LOGIN_PASSWORD_KEY = "fishops_login_password"
+
+if st.session_state.pop("fishops_clear_login_password", False):
+    st.session_state[LOGIN_PASSWORD_KEY] = ""
+
 
 @st.cache_resource(show_spinner=False)
 def _get_engine():
@@ -50,14 +73,29 @@ def _database_engine():
         st.stop()
 
 
-def _record_auth_event(email: str, event_type: str, name: str | None = None) -> None:
-    with session_scope(ENGINE) as session:
-        session.add(
-            AuthenticationLog(
-                email=email,
-                administrator_name=name,
-                event_type=event_type,
+def _record_auth_event(
+    email: str, event_type: str, name: str | None = None
+) -> bool:
+    try:
+        with session_scope(_get_engine()) as session:
+            session.add(
+                AuthenticationLog(
+                    email=email,
+                    administrator_name=name,
+                    event_type=event_type,
+                )
             )
+    except OperationalError:
+        return False
+    return True
+
+
+def _record_auth_event_or_warn(
+    email: str, event_type: str, name: str | None = None
+) -> None:
+    if not _record_auth_event(email, event_type, name):
+        st.session_state["fishops_login_notice"] = (
+            "The authentication event could not be recorded because the database is unavailable."
         )
 
 
@@ -81,33 +119,148 @@ def _render_login_page() -> None:
         unsafe_allow_html=True,
     )
     st.info("Internal access only · Authorized administrators only")
-    st.button("Continue with Google", on_click=lambda: st.login(), type="primary")
-    st.caption("Secure access for approved FishOps administrators.")
+    denied_email = st.session_state.get("fishops_denied_email")
+    if denied_email:
+        st.title("Access denied")
+        st.error("This email is not authorized to access FishOps Prospect Intelligence.")
+        if st.button("Return to sign in"):
+            st.session_state.pop("fishops_denied_email", None)
+            st.rerun()
+        st.stop()
+
+    notice = st.session_state.pop("fishops_login_notice", None)
+    if notice:
+        st.warning(notice)
+    error = st.session_state.pop("fishops_login_error", None)
+    if error:
+        st.error(error)
+
+    with st.form("fishops_login_form"):
+        email = st.text_input("Email", key=LOGIN_EMAIL_KEY, autocomplete="email")
+        password = st.text_input(
+            "Password",
+            type="password",
+            key=LOGIN_PASSWORD_KEY,
+            autocomplete="current-password",
+        )
+        submitted = st.form_submit_button("Sign in", type="primary")
+
+    st.caption("Sign-in is available only to approved FishOps administrators.")
+    if not submitted:
+        return
+
+    normalized_email = normalize_email(email)
+    administrator = get_authorized_administrator(normalized_email)
+    if not normalized_email or not password:
+        st.session_state["fishops_login_error"] = (
+            "Enter both your administrator email and password."
+        )
+    elif administrator is None:
+        _record_auth_event_or_warn(normalized_email, "login_denied")
+        st.session_state["fishops_denied_email"] = normalized_email
+    else:
+        try:
+            authenticated_session = sign_in_with_password(email, password)
+        except UnauthorizedAdministratorError:
+            _record_auth_event_or_warn(normalized_email, "login_denied")
+            st.session_state["fishops_denied_email"] = normalized_email
+        except UnconfirmedEmailError:
+            _record_auth_event_or_warn(
+                normalized_email, "login_failed", administrator.name
+            )
+            st.session_state["fishops_login_error"] = (
+                "This account's email must be confirmed in Supabase before signing in."
+            )
+        except AuthApiError:
+            _record_auth_event_or_warn(
+                normalized_email, "login_failed", administrator.name
+            )
+            st.session_state["fishops_login_error"] = (
+                "Sign-in failed. Check your email and password, then try again."
+            )
+        except httpx.HTTPError:
+            _record_auth_event_or_warn(
+                normalized_email, "login_failed", administrator.name
+            )
+            st.session_state["fishops_login_error"] = (
+                "The authentication service is unavailable. Please try again later."
+            )
+        except SupabaseAuthConfigurationError:
+            st.session_state["fishops_login_error"] = (
+                "Authentication is not configured correctly. Contact the system administrator."
+            )
+        except SupabaseAuthSessionError:
+            st.session_state["fishops_login_error"] = (
+                "A valid authentication session could not be established. Please try again."
+            )
+        else:
+            if not _record_auth_event(
+                authenticated_session.email,
+                "login_success",
+                administrator.name,
+            ):
+                try:
+                    sign_out_session(authenticated_session)
+                except (AuthApiError, httpx.HTTPError):
+                    st.session_state["fishops_login_notice"] = (
+                        "The sign-in session could not be revoked; contact the system administrator."
+                    )
+                st.session_state["fishops_login_error"] = (
+                    "Sign-in is unavailable because the login audit could not be written."
+                )
+            else:
+                st.session_state[AUTH_SESSION_KEY] = authenticated_session
+                st.session_state.pop("fishops_login_error", None)
+
+    st.session_state["fishops_clear_login_password"] = True
+    st.rerun()
 
 
-if not st.user.get("is_logged_in", False):
+def _resolve_active_administrator() -> tuple[AuthenticatedSession, Administrator] | None:
+    authenticated_session = st.session_state.get(AUTH_SESSION_KEY)
+    if not isinstance(authenticated_session, AuthenticatedSession):
+        st.session_state.pop(AUTH_SESSION_KEY, None)
+        return None
+
+    if authenticated_session.expires_at <= int(time.time()) + 60:
+        try:
+            authenticated_session = refresh_authenticated_session(
+                authenticated_session.refresh_token
+            )
+        except (
+            AuthApiError,
+            httpx.HTTPError,
+            SupabaseAuthConfigurationError,
+            SupabaseAuthSessionError,
+            UnconfirmedEmailError,
+        ):
+            st.session_state.pop(AUTH_SESSION_KEY, None)
+            st.session_state["fishops_login_notice"] = (
+                "Your session could not be renewed. Please sign in again."
+            )
+            if not _record_auth_event(authenticated_session.email, "session_expired"):
+                st.session_state["fishops_login_notice"] += (
+                    " The session event could not be recorded."
+                )
+            return None
+        st.session_state[AUTH_SESSION_KEY] = authenticated_session
+
+    administrator = get_authorized_administrator(authenticated_session.email)
+    if administrator is None:
+        st.session_state.pop(AUTH_SESSION_KEY, None)
+        _record_auth_event_or_warn(authenticated_session.email, "login_denied")
+        st.session_state["fishops_denied_email"] = authenticated_session.email
+        return None
+    return authenticated_session, administrator
+
+
+_active_auth = _resolve_active_administrator()
+if _active_auth is None:
     _render_login_page()
     st.stop()
 
-_user_email = current_user_email()
-_administrator = get_authorized_administrator(_user_email)
-_auth_event_key = f"fishops_auth_event:{_user_email}"
+_authenticated_session, _administrator = _active_auth
 ENGINE = _database_engine()
-
-if _auth_event_key not in st.session_state:
-    _record_auth_event(
-        _user_email,
-        "login_success" if _administrator else "login_denied",
-        _administrator.name if _administrator else None,
-    )
-    st.session_state[_auth_event_key] = True
-
-if _administrator is None:
-    st.title("Access denied")
-    st.error("This account is not authorized to access FishOps Prospect Intelligence.")
-    st.caption("If you believe this is an error, contact a FishOps administrator.")
-    st.button("Sign out", on_click=st.logout)
-    st.stop()
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
 
@@ -151,11 +304,17 @@ with st.sidebar.expander("Authentication history"):
         hide_index=True,
     )
 if st.sidebar.button("Log out"):
-    try:
-        _record_auth_event(_administrator.email, "logout", _administrator.name)
-    except OperationalError:
+    if not _record_auth_event(_administrator.email, "logout", _administrator.name):
         st.sidebar.warning("Logout could not be recorded, but you are being signed out.")
-    st.logout()
+    try:
+        sign_out_session(_authenticated_session)
+    except (AuthApiError, httpx.HTTPError):
+        st.sidebar.warning(
+            "The Supabase session could not be revoked, but local access is being cleared."
+        )
+    finally:
+        st.session_state.pop(AUTH_SESSION_KEY, None)
+        st.rerun()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

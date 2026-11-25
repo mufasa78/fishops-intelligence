@@ -14,12 +14,19 @@ pip install -r requirements.txt
 Copy-Item .streamlit\secrets.toml.example .streamlit\secrets.toml
 ```
 
-Replace the example Google OAuth, database, and cookie-secret values in
-`.streamlit\secrets.toml`. The two administrator emails are Tracy
-Wambui Mburu (`mburutracy81@gmail.com`) and Stanley Gathekia
-(`njorogestan12@gmail.com`). `.env` may instead supply
+Set the Supabase project URL and publishable key, database URL, and the two
+administrator emails in `.streamlit\secrets.toml`. Tracy Wambui Mburu
+(`mburutracy81@gmail.com`) and Stanley Gathekia
+(`njorogestan12@gmail.com`) are the only application administrators. `.env`
+may instead supply `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`,
 `FISHOPS_DATABASE_URL`, `FISHOPS_ADMIN_EMAIL_1`, and
 `FISHOPS_ADMIN_EMAIL_2`.
+
+Create each administrator as an individual user in Supabase Auth, confirm
+their email, and disable public sign-ups. The app does not store passwords or
+provide account creation/reset flows; each person signs in with their own
+Supabase-managed password. Use only a publishable/anon key in the app, never
+the service-role key.
 
 The local database defaults to SQLite if no connection is configured.
 Production uses Supabase PostgreSQL with all FishOps tables isolated in the
@@ -33,8 +40,8 @@ python -m pytest tests/ -v
 streamlit run app.py
 ```
 
-Google OIDC must be configured before attempting the login flow. Scraped
-records remain unverified until manually reviewed.
+Supabase Auth email/password must be configured before attempting the login
+flow. Scraped records remain unverified until manually reviewed.
 
 ## Collect and load source records
 
@@ -63,6 +70,8 @@ record the actual result rather than treating an empty run as successful data.
 
 The most recent collection attempt and live database baseline are documented
 in [the source collection report](docs/source-collection-report-2026-11-25.md).
+Public partner-page contacts and endpoints that could not be checked are
+documented in [the partner contact research report](docs/partner-contact-research-2026-11-25.md).
 
 ## Database setup and migration
 

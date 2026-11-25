@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+
 import pytest
 from sqlalchemy import select
 
+import collect
 from fishops.collectors.base import CandidateRecord
 from fishops.db.models import (
     CollectionRun,
@@ -140,3 +143,24 @@ def test_sqlite_database_survives_engine_restart(tmp_path):
         organizations = session.execute(select(Organization)).scalars().all()
 
     assert [org.business_name for org in organizations] == ["Persistent Farm"]
+
+
+def test_csv_import_does_not_run_default_live_collector(monkeypatch, tmp_path, capsys):
+    database_path = tmp_path / "import.db"
+    input_path = tmp_path / "public_contacts.csv"
+    with input_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=["business_name", "source_url"])
+        writer.writeheader()
+        writer.writerow(
+            {
+                "business_name": "Public Contact Organization",
+                "source_url": "https://example.org/contact",
+            }
+        )
+
+    monkeypatch.setenv("FISHOPS_DATABASE_URL", f"sqlite:///{database_path.as_posix()}")
+    monkeypatch.setenv("FISHOPS_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setitem(collect.ADAPTER_MAP, "goafrica", lambda **_: pytest.fail("live source ran"))
+
+    assert collect.main(["--import-csv", str(input_path)]) == 0
+    assert "New source records:   1" in capsys.readouterr().out

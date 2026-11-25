@@ -15,7 +15,7 @@ fishops-database/
 ├── fishops/
 │   ├── __init__.py
 │   ├── config.py          # Settings, env vars, folder creation
-│   ├── auth.py            # Google OIDC administrator allowlist
+│   ├── auth.py            # Supabase Auth and administrator allowlist
 │   ├── constants.py       # Business types, pipeline stages, 47 KE counties
 │   ├── normalization.py   # Phone, email, name, URL, county, classification
 │   ├── staging.py         # CandidateRecord → DB (org shell + source record + contacts)
@@ -208,8 +208,10 @@ python -m pytest tests/ -v
 | `FISHOPS_DATA_DIR` | `./data` | Root for DB and CSV output |
 | `FISHOPS_RAW_DIR` | `./data/raw` | CSV export directory |
 | `FISHOPS_DEFAULT_COUNTRY` | `KE` | ISO-3166 country code |
-| `FISHOPS_ADMIN_EMAIL_1` | — | Google account authorized for Tracy Wambui Mburu |
-| `FISHOPS_ADMIN_EMAIL_2` | — | Google account authorized for Stanley Gathekia |
+| `FISHOPS_ADMIN_EMAIL_1` | — | Email authorized for Tracy Wambui Mburu |
+| `FISHOPS_ADMIN_EMAIL_2` | — | Email authorized for Stanley Gathekia |
+| `SUPABASE_URL` | — | Supabase project URL used for Auth |
+| `SUPABASE_PUBLISHABLE_KEY` | — | Supabase publishable/anon key used for Auth |
 
 Production uses Supabase PostgreSQL in the isolated `prospects` schema. Set
 `FISHOPS_DATABASE_URL` in the environment or `[database].url` in Streamlit
@@ -217,18 +219,21 @@ secrets. Do not put database credentials in source files.
 
 ## Administrator Access
 
-The Streamlit app uses Google OpenID Connect through Streamlit's native
-`st.login()` / `st.user` / `st.logout()` flow. Access is granted only when the
-authenticated email exactly matches one of the normalized administrator emails.
-The configured administrator names are display labels, not authorization
-identifiers. The allowlist is configured using `FISHOPS_ADMIN_EMAIL_1` and
-`FISHOPS_ADMIN_EMAIL_2`, or `[admins].email_1` and `[admins].email_2` in
-Streamlit secrets.
+The app uses Supabase Auth email/password sign-in for existing, confirmed
+accounts. Access is granted only when the authenticated email exactly matches
+one of the normalized administrator emails. The configured administrator names
+are display labels, not authorization identifiers. The allowlist is configured
+using `FISHOPS_ADMIN_EMAIL_1` and `FISHOPS_ADMIN_EMAIL_2`, or
+`[admins].email_1` and `[admins].email_2` in Streamlit secrets. Public sign-ups
+must be disabled; user creation and password management stay in Supabase Auth.
+The app keeps access and refresh tokens only in the individual Streamlit server
+session, refreshes near expiry, and does not store submitted passwords. Use a
+publishable/anon key in the app, never the service-role key.
 
 Authentication events (successful login, denied access, and logout) are stored
 in `prospects.authentication_logs`. Authorized administrators can see recent
-events and the last successful login in the sidebar. No OIDC tokens are stored.
-Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` for local
+events and the last successful login in the sidebar. Copy
+`.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` for local
 configuration; never commit the populated secrets file.
 
 ## PostgreSQL Migrations
@@ -283,8 +288,8 @@ for actual results and failures from the latest run.
 - [x] robots.txt respected before every web request
 - [x] Minimum 2-second delay between HTTP requests enforced at base level
 - [ ] **Phase 4:** Full review UI with approve / merge / reject / opt-out workflow
-- [x] **Phase 7:** Google OIDC allowlist and authentication audit implementation
-- [ ] **Phase 7:** Live OAuth validation and encrypted backups
+- [x] **Phase 7:** Supabase Auth allowlist and authentication audit implementation
+- [ ] **Phase 7:** Live email/password validation and encrypted backups
 
 ---
 
@@ -298,4 +303,4 @@ for actual results and failures from the latest run.
 | 4 | Contacts, calls, WhatsApp conversations, interaction timeline | 🔲 Next |
 | 5 | Meetings, site visits, tasks, follow-up reminders | 🔲 Planned |
 | 6 | Pipeline Kanban, geographic map, analytics | 🔲 Planned |
-| 7 | PostgreSQL migration, authentication, backups, deployment | 🟡 Partial: PostgreSQL and auth implemented; live OAuth/deployment/backups pending |
+| 7 | PostgreSQL migration, authentication, backups, deployment | 🟡 Partial: PostgreSQL and auth implemented; live authentication/deployment/backups pending |

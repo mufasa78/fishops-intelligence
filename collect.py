@@ -46,9 +46,13 @@ def build_argparser() -> argparse.ArgumentParser:
         "--sources",
         nargs="+",
         choices=list(ADAPTER_MAP.keys()),
-        default=["goafrica"],
+        default=None,
         metavar="SOURCE",
-        help=f"One or more collection sources: {', '.join(ADAPTER_MAP.keys())}",
+        help=(
+            "One or more collection sources: "
+            f"{', '.join(ADAPTER_MAP.keys())}; defaults to Go Africa Online "
+            "unless importing a CSV"
+        ),
     )
     parser.add_argument(
         "--max-pages",
@@ -99,11 +103,14 @@ def build_argparser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_argparser().parse_args(argv)
     settings = get_settings()
+    source_keys = args.sources
+    if source_keys is None:
+        source_keys = [] if args.import_csv else ["goafrica"]
 
     all_records: list[CandidateRecord] = []
 
     # --- Live collection ---
-    for source_key in args.sources:
+    for source_key in source_keys:
         cls = ADAPTER_MAP[source_key]
         collector = cls(
             delay=args.delay,
@@ -140,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- CSV export ---
     output_dir = Path(args.output_dir) if args.output_dir else settings.raw_output_dir
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    sources_tag = "_".join(sorted(args.sources)) or "import"
+    sources_tag = "_".join(sorted(source_keys)) or "import"
     csv_path = output_dir / f"fishops_candidates_{sources_tag}_{timestamp}.csv"
 
     export_candidates_csv(unique, csv_path)
