@@ -28,6 +28,7 @@ from fishops.auth import (
     get_invitation_browser_config,
     normalize_email,
     refresh_authenticated_session,
+    send_password_recovery_email,
     sign_in_with_password,
     sign_out_session,
 )
@@ -101,8 +102,8 @@ def _record_auth_event_or_warn(
         )
 
 
-def _render_invitation_password_setup_bridge() -> None:
-    """Handle Supabase's browser-only invite fragment without exposing it to Streamlit."""
+def _render_password_setup_bridge() -> None:
+    """Handle Supabase invite and recovery fragments without exposing tokens to Streamlit."""
     try:
         supabase_url, publishable_key, admin_emails = get_invitation_browser_config()
         config = {
@@ -113,7 +114,7 @@ def _render_invitation_password_setup_bridge() -> None:
     except SupabaseAuthConfigurationError:
         config = {"url": "", "publishableKey": "", "adminEmails": []}
 
-    invitation_component = """
+    password_setup_component = """
 <!doctype html>
 <html>
 <head>
@@ -136,7 +137,7 @@ def _render_invitation_password_setup_bridge() -> None:
 <body>
   <main id="panel" hidden>
     <section id="card">
-      <h1>Complete your FishOps invitation</h1>
+      <h1 id="heading">Complete your FishOps invitation</h1>
       <p id="account"></p>
       <p>Choose a password with at least 12 characters. Use a unique password you do not use elsewhere.</p>
       <form id="password-form" hidden>
@@ -153,6 +154,7 @@ def _render_invitation_password_setup_bridge() -> None:
   <script>
     const config = __PUBLIC_CONFIG__;
     const panel = document.getElementById("panel");
+    const heading = document.getElementById("heading");
     const account = document.getElementById("account");
     const message = document.getElementById("message");
     const form = document.getElementById("password-form");
@@ -174,9 +176,9 @@ def _render_invitation_password_setup_bridge() -> None:
       continueButton.hidden = false;
     }
 
-    async function initializeInvitation(accessToken) {
+    async function initializePasswordSetup(accessToken, flowType) {
       if (!config.url || !config.publishableKey) {
-        showError("Invitation setup is not configured. Contact the system administrator.");
+        showError("Password setup is not configured. Contact the system administrator.");
         return;
       }
       try {
@@ -193,28 +195,37 @@ def _render_invitation_password_setup_bridge() -> None:
         const normalizedEmail = (user.email || "").trim().toLowerCase();
         const allowed = config.adminEmails.map(email => email.toLowerCase());
         if (!allowed.includes(normalizedEmail)) {
-          showError("This invitation is not for an authorized FishOps administrator.");
+          showError("This link is not for an authorized FishOps administrator.");
           return;
         }
-        account.textContent = `Set a password for ${normalizedEmail} to finish setup.`;
+        heading.textContent = flowType === "invite"
+          ? "Complete your FishOps invitation"
+          : "Reset your FishOps password";
+        account.textContent = flowType === "invite"
+          ? `Set a password for ${normalizedEmail} to finish setup.`
+          : `Choose a new password for ${normalizedEmail}.`;
         form.hidden = false;
       } catch {
-        showError("This invitation link is invalid or expired. Ask an administrator to send a new one.");
+        showError("This link is invalid or expired. Request a new invitation or password reset link.");
       }
     }
 
     try {
       const browserUrl = window.location;
       const hashParams = new URLSearchParams(browserUrl.hash.slice(1));
-      if (hashParams.get("type") !== "invite") {
+      const flowType = hashParams.get("type");
+      if (flowType !== "invite" && flowType !== "recovery") {
         hideBridge();
       } else {
         showBridge();
+        heading.textContent = flowType === "invite"
+          ? "Complete your FishOps invitation"
+          : "Reset your FishOps password";
         const accessToken = hashParams.get("access_token");
         if (!accessToken) {
-          showError("The invitation link is incomplete. Ask an administrator to send a new one.");
+          showError("This link is incomplete. Request a new invitation or password reset link.");
         } else {
-          initializeInvitation(accessToken);
+          initializePasswordSetup(accessToken, flowType);
         }
       }
     } catch {
@@ -253,7 +264,7 @@ def _render_invitation_password_setup_bridge() -> None:
         }
         form.hidden = true;
         message.dataset.error = "";
-        message.textContent = "Password set. You can now sign in.";
+        message.textContent = "Password updated. You can now sign in.";
         continueButton.textContent = "Continue to sign in";
         continueButton.hidden = false;
         window.history.replaceState(
@@ -262,7 +273,7 @@ def _render_invitation_password_setup_bridge() -> None:
           window.location.pathname + window.location.search
         );
       } catch {
-        showError("Could not set the password. The invitation may have expired; request a new invitation if needed.");
+        showError("Could not update the password. This link may have expired; request a new one.");
       } finally {
         submit.disabled = false;
       }
@@ -280,15 +291,15 @@ def _render_invitation_password_setup_bridge() -> None:
 </body>
 </html>
 """
-    invitation_component = invitation_component.replace(
+    password_setup_component = password_setup_component.replace(
         "__PUBLIC_CONFIG__",
         json.dumps(config).replace("</", "<\\/"),
     )
-    st.html(invitation_component, unsafe_allow_javascript=True)
+    st.html(password_setup_component, unsafe_allow_javascript=True)
 
 
 def _render_login_page() -> None:
-    _render_invitation_password_setup_bridge()
+    _render_password_setup_bridge()
     st.markdown(
         """
         <style>
@@ -335,6 +346,48 @@ def _render_login_page() -> None:
         submitted = st.form_submit_button("Sign in", type="primary")
 
     st.caption("Sign-in is available only to approved FishOps administrators.")
+
+    with st.expander("Forgot your password?"):
+        with st.form("fishops_password_recovery_form"):
+            recovery_email = st.text_input(
+                "Administrator email",
+                key="fishops_recovery_email",
+                autocomplete="email",
+            )
+            recovery_submitted = st.form_submit_button("Send password reset link")
+
+        if recovery_submitted:
+            if not normalize_email(recovery_email):
+                st.error("Enter your administrator email address.")
+            else:
+                try:
+                    send_password_recovery_email(recovery_email)
+                except AuthApiError as error:
+                    if "rate limit" in str(error).lower():
+                        st.error(
+                            "The email service has reached its temporary sending "
+                            "limit. Wait before requesting another link, or ask "
+                            "the administrator to configure a custom email sender."
+                        )
+                    else:
+                        st.error(
+                            "Unable to send a password reset email right now. "
+                            "Please try again later."
+                        )
+                except httpx.HTTPError:
+                    st.error(
+                        "The authentication service is unavailable. Please try again later."
+                    )
+                except SupabaseAuthConfigurationError:
+                    st.error(
+                        "Authentication is not configured correctly. Contact the system administrator."
+                    )
+                else:
+                    st.success(
+                        "If this address is authorized, a password reset link "
+                        "will be sent shortly."
+                    )
+
     if not submitted:
         return
 

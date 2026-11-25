@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 from supabase import Client, create_client
+from supabase.lib.client_options import SyncClientOptions
 from supabase_auth.types import AuthResponse
 
 
@@ -160,6 +161,24 @@ def sign_in_with_password(email: str, password: str) -> AuthenticatedSession:
             "This email is not an authorized administrator."
         )
     return authenticated_session
+
+
+def send_password_recovery_email(email: str) -> None:
+    """Send an implicit-flow password recovery link to an authorized administrator."""
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        raise ValueError("An email address is required.")
+
+    if get_authorized_administrator(normalized_email) is None:
+        return
+
+    url, publishable_key = _configured_supabase_auth_settings()
+    client = create_client(
+        url,
+        publishable_key,
+        options=SyncClientOptions(flow_type="implicit"),
+    )
+    client.auth.reset_password_for_email(normalized_email)
 
 
 def refresh_authenticated_session(refresh_token: str) -> AuthenticatedSession:
