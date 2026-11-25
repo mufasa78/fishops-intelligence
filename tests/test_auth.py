@@ -29,14 +29,10 @@ class FakeSupabaseAuth:
         self.refresh_token = None
         self.sign_out_options = None
         self.session_tokens = None
-        self.recovery_email = None
 
     def sign_in_with_password(self, credentials):
         self.sign_in_credentials = credentials
         return self.response
-
-    def reset_password_for_email(self, email):
-        self.recovery_email = email
 
     def refresh_session(self, refresh_token):
         self.refresh_token = refresh_token
@@ -97,24 +93,32 @@ def test_unlisted_email_is_rejected_before_supabase_auth(monkeypatch):
         auth.sign_in_with_password("outsider@example.com", "password")
 
 
-def test_password_recovery_uses_implicit_flow_for_authorized_email(monkeypatch):
+def test_password_recovery_sends_auth_request_for_authorized_email(monkeypatch):
     _configure_admin(monkeypatch)
-    client = FakeSupabaseClient(_response())
-    create_client_calls = []
+    requests = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
     monkeypatch.setattr(
-        auth,
-        "create_client",
-        lambda url, key, options: (
-            create_client_calls.append((url, key, options.flow_type)) or client
-        ),
+        auth.httpx,
+        "post",
+        lambda url, **kwargs: requests.append((url, kwargs)) or FakeResponse(),
     )
 
     auth.send_password_recovery_email(" MBURUTRACY81@GMAIL.COM ")
 
-    assert create_client_calls == [
-        ("https://fishops.supabase.co", "publishable-key", "implicit")
+    assert requests == [
+        (
+            "https://fishops.supabase.co/auth/v1/recover",
+            {
+                "headers": {"apikey": "publishable-key"},
+                "json": {"email": "mburutracy81@gmail.com"},
+                "timeout": 10.0,
+            },
+        )
     ]
-    assert client.auth.recovery_email == "mburutracy81@gmail.com"
 
 
 def test_password_recovery_does_not_send_for_unlisted_email(monkeypatch):

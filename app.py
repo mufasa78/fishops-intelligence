@@ -362,8 +362,8 @@ def _render_login_page() -> None:
             else:
                 try:
                     send_password_recovery_email(recovery_email)
-                except AuthApiError as error:
-                    if "rate limit" in str(error).lower():
+                except httpx.HTTPStatusError as error:
+                    if "rate limit" in error.response.text.lower():
                         st.error(
                             "The email service has reached its temporary sending "
                             "limit. Wait before requesting another link, or ask "

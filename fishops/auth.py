@@ -6,10 +6,10 @@ import os
 import time
 from dataclasses import dataclass
 
+import httpx
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 from supabase import Client, create_client
-from supabase.lib.client_options import SyncClientOptions
 from supabase_auth.types import AuthResponse
 
 
@@ -173,12 +173,13 @@ def send_password_recovery_email(email: str) -> None:
         return
 
     url, publishable_key = _configured_supabase_auth_settings()
-    client = create_client(
-        url,
-        publishable_key,
-        options=SyncClientOptions(flow_type="implicit"),
+    response = httpx.post(
+        f"{url.rstrip('/')}/auth/v1/recover",
+        headers={"apikey": publishable_key},
+        json={"email": normalized_email},
+        timeout=10.0,
     )
-    client.auth.reset_password_for_email(normalized_email)
+    response.raise_for_status()
 
 
 def refresh_authenticated_session(refresh_token: str) -> AuthenticatedSession:
