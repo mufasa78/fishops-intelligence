@@ -115,3 +115,12 @@ def test_refresh_and_sign_out_are_scoped_to_current_session(monkeypatch):
     assert client.auth.refresh_token == "refresh-token"
     assert client.auth.session_tokens == ("access-token", "refresh-token")
     assert client.auth.sign_out_options == {"scope": "local"}
+
+
+def test_invitation_browser_config_contains_only_public_settings(monkeypatch):
+    _configure_admin(monkeypatch)
+    url, key, emails = auth.get_invitation_browser_config()
+
+    assert url == "https://fishops.supabase.co"
+    assert key == "publishable-key"
+    assert emails == ("mburutracy81@gmail.com", "njorogestan12@gmail.com")

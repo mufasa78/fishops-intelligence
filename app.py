@@ -7,6 +7,7 @@ Launch:
 
 from __future__ import annotations
 
+import json
 import time
 
 import httpx
@@ -24,6 +25,7 @@ from fishops.auth import (
     UnauthorizedAdministratorError,
     UnconfirmedEmailError,
     get_authorized_administrator,
+    get_invitation_browser_config,
     normalize_email,
     refresh_authenticated_session,
     sign_in_with_password,
@@ -99,7 +101,194 @@ def _record_auth_event_or_warn(
         )
 
 
+def _render_invitation_password_setup_bridge() -> None:
+    """Handle Supabase's browser-only invite fragment without exposing it to Streamlit."""
+    try:
+        supabase_url, publishable_key, admin_emails = get_invitation_browser_config()
+        config = {
+            "url": supabase_url,
+            "publishableKey": publishable_key,
+            "adminEmails": admin_emails,
+        }
+    except SupabaseAuthConfigurationError:
+        config = {"url": "", "publishableKey": "", "adminEmails": []}
+
+    invitation_component = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; color: #172b4d; font: 16px system-ui, sans-serif; }
+    #panel { position: fixed; inset: 0; z-index: 2147483000; box-sizing: border-box; display: grid; min-height: 100vh; place-items: center; padding: 24px; background: #f3f6f9; }
+    #panel[hidden] { display: none; }
+    #card { box-sizing: border-box; width: min(100%, 520px); padding: 32px; border-radius: 12px; background: white; box-shadow: 0 8px 32px #0b254522; }
+    h1 { margin-top: 0; color: #0b2545; font-size: 1.5rem; }
+    p { color: #526174; line-height: 1.5; }
+    label { display: block; margin: 16px 0 6px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #aeb9c6; border-radius: 6px; font: inherit; }
+    button { margin-top: 20px; padding: 12px 18px; border: 0; border-radius: 6px; background: #138b91; color: white; cursor: pointer; font: inherit; font-weight: 600; }
+    button:disabled { cursor: wait; opacity: .7; }
+    #message { margin-top: 16px; }
+    #message[data-error="true"] { color: #a32121; }
+  </style>
+</head>
+<body>
+  <main id="panel" hidden>
+    <section id="card">
+      <h1>Complete your FishOps invitation</h1>
+      <p id="account"></p>
+      <p>Choose a password with at least 12 characters. Use a unique password you do not use elsewhere.</p>
+      <form id="password-form" hidden>
+        <label for="password">New password</label>
+        <input id="password" type="password" minlength="12" autocomplete="new-password" required>
+        <label for="confirm-password">Confirm new password</label>
+        <input id="confirm-password" type="password" minlength="12" autocomplete="new-password" required>
+        <button id="submit" type="submit">Set password</button>
+      </form>
+      <p id="message" role="status"></p>
+      <button id="continue" type="button" hidden>Continue to sign in</button>
+    </section>
+  </main>
+  <script>
+    const config = __PUBLIC_CONFIG__;
+    const panel = document.getElementById("panel");
+    const account = document.getElementById("account");
+    const message = document.getElementById("message");
+    const form = document.getElementById("password-form");
+    const submit = document.getElementById("submit");
+    const continueButton = document.getElementById("continue");
+
+    function hideBridge() {
+      panel.hidden = true;
+    }
+
+    function showBridge() {
+      panel.hidden = false;
+    }
+
+    function showError(text) {
+      message.textContent = text;
+      message.dataset.error = "true";
+      continueButton.textContent = "Return to sign in";
+      continueButton.hidden = false;
+    }
+
+    async function initializeInvitation(accessToken) {
+      if (!config.url || !config.publishableKey) {
+        showError("Invitation setup is not configured. Contact the system administrator.");
+        return;
+      }
+      try {
+        const response = await fetch(`${config.url}/auth/v1/user`, {
+          headers: {
+            apikey: config.publishableKey,
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        if (!response.ok) {
+          throw new Error("invalid-session");
+        }
+        const user = await response.json();
+        const normalizedEmail = (user.email || "").trim().toLowerCase();
+        const allowed = config.adminEmails.map(email => email.toLowerCase());
+        if (!allowed.includes(normalizedEmail)) {
+          showError("This invitation is not for an authorized FishOps administrator.");
+          return;
+        }
+        account.textContent = `Set a password for ${normalizedEmail} to finish setup.`;
+        form.hidden = false;
+      } catch {
+        showError("This invitation link is invalid or expired. Ask an administrator to send a new one.");
+      }
+    }
+
+    try {
+      const browserUrl = window.location;
+      const hashParams = new URLSearchParams(browserUrl.hash.slice(1));
+      if (hashParams.get("type") !== "invite") {
+        hideBridge();
+      } else {
+        showBridge();
+        const accessToken = hashParams.get("access_token");
+        if (!accessToken) {
+          showError("The invitation link is incomplete. Ask an administrator to send a new one.");
+        } else {
+          initializeInvitation(accessToken);
+        }
+      }
+    } catch {
+      hideBridge();
+    }
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      message.textContent = "";
+      message.dataset.error = "";
+      const password = document.getElementById("password").value;
+      const confirmation = document.getElementById("confirm-password").value;
+      if (password.length < 12) {
+        showError("Choose a password with at least 12 characters.");
+        return;
+      }
+      if (password !== confirmation) {
+        showError("The passwords do not match.");
+        return;
+      }
+      submit.disabled = true;
+      try {
+        const hashParams = new URLSearchParams(window.location.hash.slice(1));
+        const accessToken = hashParams.get("access_token");
+        const response = await fetch(`${config.url}/auth/v1/user`, {
+          method: "PUT",
+          headers: {
+            apikey: config.publishableKey,
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ password })
+        });
+        if (!response.ok) {
+          throw new Error("password-update-failed");
+        }
+        form.hidden = true;
+        message.dataset.error = "";
+        message.textContent = "Password set. You can now sign in.";
+        continueButton.textContent = "Continue to sign in";
+        continueButton.hidden = false;
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search
+        );
+      } catch {
+        showError("Could not set the password. The invitation may have expired; request a new invitation if needed.");
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    continueButton.addEventListener("click", () => {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search
+      );
+      window.location.reload();
+    });
+  </script>
+</body>
+</html>
+"""
+    invitation_component = invitation_component.replace(
+        "__PUBLIC_CONFIG__",
+        json.dumps(config).replace("</", "<\\/"),
+    )
+    st.html(invitation_component, unsafe_allow_javascript=True)
+
+
 def _render_login_page() -> None:
+    _render_invitation_password_setup_bridge()
     st.markdown(
         """
         <style>

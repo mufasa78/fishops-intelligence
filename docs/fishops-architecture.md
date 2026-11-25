@@ -230,6 +230,12 @@ The app keeps access and refresh tokens only in the individual Streamlit server
 session, refreshes near expiry, and does not store submitted passwords. Use a
 publishable/anon key in the app, never the service-role key.
 
+Supabase invitation redirects use the production app URL. Invite tokens arrive
+in the browser URL fragment and are handled by a small in-browser password
+setup form; the invited email is checked against the allowlist before the
+password is sent directly to Supabase Auth. The token and password are not
+stored by the Streamlit server.
+
 Authentication events (successful login, denied access, and logout) are stored
 in `prospects.authentication_logs`. Authorized administrators can see recent
 events and the last successful login in the sidebar. Copy

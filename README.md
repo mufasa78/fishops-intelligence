@@ -4,6 +4,8 @@ Internal prospecting and relationship intelligence for the Kenya aquaculture
 value chain. The application preserves the existing collectors, unverified
 candidate review flow, SQLAlchemy data model, and Streamlit dashboard.
 
+Production app: [FishOps Intelligence](https://fishops-intelligence-4ofjpgfc6zyhsxxuafvqvz.streamlit.app/)
+
 ## Local setup
 
 ```powershell
@@ -22,11 +24,11 @@ may instead supply `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`,
 `FISHOPS_DATABASE_URL`, `FISHOPS_ADMIN_EMAIL_1`, and
 `FISHOPS_ADMIN_EMAIL_2`.
 
-Create each administrator as an individual user in Supabase Auth, confirm
-their email, and disable public sign-ups. The app does not store passwords or
-provide account creation/reset flows; each person signs in with their own
-Supabase-managed password. Use only a publishable/anon key in the app, never
-the service-role key.
+Invite each administrator individually from Supabase Auth and disable public
+sign-ups. The invitation redirects to the production app, where each
+administrator sets a unique password of at least 12 characters. The password
+is sent directly from the browser to Supabase Auth; the app never stores it.
+Use only a publishable/anon key in the app, never the service-role key.
 
 The local database defaults to SQLite if no connection is configured.
 Production uses Supabase PostgreSQL with all FishOps tables isolated in the

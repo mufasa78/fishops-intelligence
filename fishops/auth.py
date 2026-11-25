@@ -78,7 +78,7 @@ def get_authorized_administrator(email: str | None) -> Administrator | None:
     return None
 
 
-def _create_supabase_auth_client() -> Client:
+def _configured_supabase_auth_settings() -> tuple[str, str]:
     try:
         settings = st.secrets.get("supabase", {})
     except StreamlitSecretNotFoundError:
@@ -98,6 +98,18 @@ def _create_supabase_auth_client() -> Client:
             "Supabase Auth URL and publishable key are not configured."
         )
 
+    return url, publishable_key
+
+
+def get_invitation_browser_config() -> tuple[str, str, tuple[str, ...]]:
+    """Return only public client settings needed to complete email invitations."""
+    url, publishable_key = _configured_supabase_auth_settings()
+    admin_emails = tuple(email for email in _configured_admin_emails() if email)
+    return url, publishable_key, admin_emails
+
+
+def _create_supabase_auth_client() -> Client:
+    url, publishable_key = _configured_supabase_auth_settings()
     return create_client(url, publishable_key)
 
 

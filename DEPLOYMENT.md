@@ -10,6 +10,8 @@
 The application code and source collection documentation have been pushed. The
 live app has not been deployed from this workspace.
 
+Production URL: https://fishops-intelligence-4ofjpgfc6zyhsxxuafvqvz.streamlit.app/
+
 ## Local configuration
 
 1. Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`.
@@ -19,10 +21,13 @@ live app has not been deployed from this workspace.
    the `prospects` search path. Alternatively configure `FISHOPS_DATABASE_URL`.
 4. Configure `[admins].email_1` as `mburutracy81@gmail.com` and
    `[admins].email_2` as `njorogestan12@gmail.com`.
-5. In Supabase Auth, create and confirm an individual user account for each
-   administrator, set a distinct strong password for each account, and disable
-   public sign-ups. Passwords belong in Supabase Auth only, never application
-   configuration.
+5. In Supabase Auth, invite each administrator individually and disable public
+   sign-ups. Set the Auth **Site URL** and allowed redirect URL to the exact
+   production URL above. The invite redirect opens the app's password setup
+   screen; each administrator chooses a unique password of at least 12
+   characters. The password is sent directly from the browser to Supabase Auth.
+   The app's invitation flow validates the invited email against the admin
+   allowlist and never stores the invite token or password on the app server.
 6. Apply the schema and authentication audit migration:
 
    ```powershell
@@ -57,11 +62,12 @@ live app has not been deployed from this workspace.
    `pyproject.toml`.
 5. In app settings, add the `[supabase]`, `[database]`, and `[admins]` sections
    from the example secrets file, using production values.
-6. Confirm Supabase Auth public sign-ups are disabled and both administrator
-   accounts are confirmed.
+6. Confirm Supabase Auth public sign-ups are disabled and the Site URL and
+   redirect allowlist point to the official production URL.
 7. Deploy, then confirm that Supabase is reachable and the schema is initialized.
-8. Test Tracy and Stanley's email/password accounts individually, verify an
-   unlisted email is denied before authentication, and test logout.
+8. Send a test invitation to each administrator and verify each invite opens
+   the password setup screen. Then test email/password sign-in, confirm an
+   unlisted email is denied, and test logout.
 9. Confirm dashboard data is visible only after administrator authorization.
 
 Never put Supabase keys, passwords, or database credentials in GitHub.
