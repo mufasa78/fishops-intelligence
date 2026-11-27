@@ -22,7 +22,23 @@ privacy requirements, source terms, and requests not to be contacted.
 
 ## Access
 
-The application is intended for authorized users. Visit the
-[FishOps Intelligence app](https://fishops-intelligence-4ofjpgfc6zyhsxxuafvqvz.streamlit.app/);
-access is granted by invitation. Authorized users can request a password reset
-from the sign-in page if they lose access to their account.
+The application uses Auth0 through Streamlit's built-in OpenID Connect login
+and permits only the administrator email addresses configured in Streamlit
+secrets. Before enabling the new login, ensure those administrators have
+accounts in the Auth0 tenant and verified email addresses. Supabase passwords
+are not migrated; users must set up their Auth0 credentials separately.
+
+For local development, add the `[auth]` and `[auth.auth0]` sections from
+`.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. Copy the
+`AUTH0_CLIENT_SECRET` value from your local `.env` into the `client_secret`
+setting, and generate a unique `cookie_secret` (for example, with
+`python -c "import secrets; print(secrets.token_hex(32))"`). Never commit
+`.streamlit/secrets.toml`.
+
+For the deployed app, configure the same sections in the Streamlit app's
+secrets settings, changing `redirect_uri` to the production callback below.
+The Auth0 application allows the local callback
+`http://localhost:8501/oauth2callback` and the production callback
+`https://fishops-intelligence-4ofjpgfc6zyhsxxuafvqvz.streamlit.app/oauth2callback`.
+Visit the [FishOps Intelligence app](https://fishops-intelligence-4ofjpgfc6zyhsxxuafvqvz.streamlit.app/)
+to sign in.

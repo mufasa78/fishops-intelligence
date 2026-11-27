@@ -7,30 +7,16 @@ Launch:
 
 from __future__ import annotations
 
-import json
-import time
-
-import httpx
 import pandas as pd
 import streamlit as st
-from supabase_auth.errors import AuthApiError
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
 from fishops.auth import (
-    AuthenticatedSession,
     Administrator,
-    SupabaseAuthConfigurationError,
-    SupabaseAuthSessionError,
-    UnauthorizedAdministratorError,
-    UnconfirmedEmailError,
-    get_authorized_administrator,
-    get_invitation_browser_config,
+    get_authenticated_administrator,
+    is_auth0_configured,
     normalize_email,
-    refresh_authenticated_session,
-    send_password_recovery_email,
-    sign_in_with_password,
-    sign_out_session,
 )
 from fishops.constants import (
     BUSINESS_TYPE_LABELS,
@@ -52,12 +38,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-AUTH_SESSION_KEY = "fishops_auth_session"
-LOGIN_EMAIL_KEY = "fishops_login_email"
-LOGIN_PASSWORD_KEY = "fishops_login_password"
-
-if st.session_state.pop("fishops_clear_login_password", False):
-    st.session_state[LOGIN_PASSWORD_KEY] = ""
+AUTH_AUDIT_IDENTITY_KEY = "fishops_auth_audit_identity"
+DENIED_IDENTITY_KEY = "fishops_denied_identity"
+DENIED_EMAIL_KEY = "fishops_denied_email"
 
 
 @st.cache_resource(show_spinner=False)
@@ -102,204 +85,7 @@ def _record_auth_event_or_warn(
         )
 
 
-def _render_password_setup_bridge() -> None:
-    """Handle Supabase invite and recovery fragments without exposing tokens to Streamlit."""
-    try:
-        supabase_url, publishable_key, admin_emails = get_invitation_browser_config()
-        config = {
-            "url": supabase_url,
-            "publishableKey": publishable_key,
-            "adminEmails": admin_emails,
-        }
-    except SupabaseAuthConfigurationError:
-        config = {"url": "", "publishableKey": "", "adminEmails": []}
-
-    password_setup_component = """
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { margin: 0; color: #172b4d; font: 16px system-ui, sans-serif; }
-    #panel { position: fixed; inset: 0; z-index: 2147483000; box-sizing: border-box; display: grid; min-height: 100vh; place-items: center; padding: 24px; background: #f3f6f9; }
-    #panel[hidden] { display: none; }
-    #card { box-sizing: border-box; width: min(100%, 520px); padding: 32px; border-radius: 12px; background: white; box-shadow: 0 8px 32px #0b254522; }
-    h1 { margin-top: 0; color: #0b2545; font-size: 1.5rem; }
-    p { color: #526174; line-height: 1.5; }
-    label { display: block; margin: 16px 0 6px; font-weight: 600; }
-    input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #aeb9c6; border-radius: 6px; font: inherit; }
-    button { margin-top: 20px; padding: 12px 18px; border: 0; border-radius: 6px; background: #138b91; color: white; cursor: pointer; font: inherit; font-weight: 600; }
-    button:disabled { cursor: wait; opacity: .7; }
-    #message { margin-top: 16px; }
-    #message[data-error="true"] { color: #a32121; }
-  </style>
-</head>
-<body>
-  <main id="panel" hidden>
-    <section id="card">
-      <h1 id="heading">Complete your FishOps invitation</h1>
-      <p id="account"></p>
-      <p>Choose a password with at least 12 characters. Use a unique password you do not use elsewhere.</p>
-      <form id="password-form" hidden>
-        <label for="password">New password</label>
-        <input id="password" type="password" minlength="12" autocomplete="new-password" required>
-        <label for="confirm-password">Confirm new password</label>
-        <input id="confirm-password" type="password" minlength="12" autocomplete="new-password" required>
-        <button id="submit" type="submit">Set password</button>
-      </form>
-      <p id="message" role="status"></p>
-      <button id="continue" type="button" hidden>Continue to sign in</button>
-    </section>
-  </main>
-  <script>
-    const config = __PUBLIC_CONFIG__;
-    const panel = document.getElementById("panel");
-    const heading = document.getElementById("heading");
-    const account = document.getElementById("account");
-    const message = document.getElementById("message");
-    const form = document.getElementById("password-form");
-    const submit = document.getElementById("submit");
-    const continueButton = document.getElementById("continue");
-
-    function hideBridge() {
-      panel.hidden = true;
-    }
-
-    function showBridge() {
-      panel.hidden = false;
-    }
-
-    function showError(text) {
-      message.textContent = text;
-      message.dataset.error = "true";
-      continueButton.textContent = "Return to sign in";
-      continueButton.hidden = false;
-    }
-
-    async function initializePasswordSetup(accessToken, flowType) {
-      if (!config.url || !config.publishableKey) {
-        showError("Password setup is not configured. Contact the system administrator.");
-        return;
-      }
-      try {
-        const response = await fetch(`${config.url}/auth/v1/user`, {
-          headers: {
-            apikey: config.publishableKey,
-            Authorization: `Bearer ${accessToken}`
-          }
-        });
-        if (!response.ok) {
-          throw new Error("invalid-session");
-        }
-        const user = await response.json();
-        const normalizedEmail = (user.email || "").trim().toLowerCase();
-        const allowed = config.adminEmails.map(email => email.toLowerCase());
-        if (!allowed.includes(normalizedEmail)) {
-          showError("This link is not for an authorized FishOps administrator.");
-          return;
-        }
-        heading.textContent = flowType === "invite"
-          ? "Complete your FishOps invitation"
-          : "Reset your FishOps password";
-        account.textContent = flowType === "invite"
-          ? `Set a password for ${normalizedEmail} to finish setup.`
-          : `Choose a new password for ${normalizedEmail}.`;
-        form.hidden = false;
-      } catch {
-        showError("This link is invalid or expired. Request a new invitation or password reset link.");
-      }
-    }
-
-    try {
-      const browserUrl = window.location;
-      const hashParams = new URLSearchParams(browserUrl.hash.slice(1));
-      const flowType = hashParams.get("type");
-      if (flowType !== "invite" && flowType !== "recovery") {
-        hideBridge();
-      } else {
-        showBridge();
-        heading.textContent = flowType === "invite"
-          ? "Complete your FishOps invitation"
-          : "Reset your FishOps password";
-        const accessToken = hashParams.get("access_token");
-        if (!accessToken) {
-          showError("This link is incomplete. Request a new invitation or password reset link.");
-        } else {
-          initializePasswordSetup(accessToken, flowType);
-        }
-      }
-    } catch {
-      hideBridge();
-    }
-
-    form.addEventListener("submit", async event => {
-      event.preventDefault();
-      message.textContent = "";
-      message.dataset.error = "";
-      const password = document.getElementById("password").value;
-      const confirmation = document.getElementById("confirm-password").value;
-      if (password.length < 12) {
-        showError("Choose a password with at least 12 characters.");
-        return;
-      }
-      if (password !== confirmation) {
-        showError("The passwords do not match.");
-        return;
-      }
-      submit.disabled = true;
-      try {
-        const hashParams = new URLSearchParams(window.location.hash.slice(1));
-        const accessToken = hashParams.get("access_token");
-        const response = await fetch(`${config.url}/auth/v1/user`, {
-          method: "PUT",
-          headers: {
-            apikey: config.publishableKey,
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ password })
-        });
-        if (!response.ok) {
-          throw new Error("password-update-failed");
-        }
-        form.hidden = true;
-        message.dataset.error = "";
-        message.textContent = "Password updated. You can now sign in.";
-        continueButton.textContent = "Continue to sign in";
-        continueButton.hidden = false;
-        window.history.replaceState(
-          null,
-          "",
-          window.location.pathname + window.location.search
-        );
-      } catch {
-        showError("Could not update the password. This link may have expired; request a new one.");
-      } finally {
-        submit.disabled = false;
-      }
-    });
-
-    continueButton.addEventListener("click", () => {
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + window.location.search
-      );
-      window.location.reload();
-    });
-  </script>
-</body>
-</html>
-"""
-    password_setup_component = password_setup_component.replace(
-        "__PUBLIC_CONFIG__",
-        json.dumps(config).replace("</", "<\\/"),
-    )
-    st.html(password_setup_component, unsafe_allow_javascript=True)
-
-
 def _render_login_page() -> None:
-    _render_password_setup_bridge()
     st.markdown(
         """
         <style>
@@ -319,189 +105,90 @@ def _render_login_page() -> None:
         unsafe_allow_html=True,
     )
     st.info("Internal access only · Authorized administrators only")
-    denied_email = st.session_state.get("fishops_denied_email")
-    if denied_email:
-        st.title("Access denied")
-        st.error("This email is not authorized to access FishOps Prospect Intelligence.")
-        if st.button("Return to sign in"):
-            st.session_state.pop("fishops_denied_email", None)
-            st.rerun()
-        st.stop()
 
     notice = st.session_state.pop("fishops_login_notice", None)
     if notice:
         st.warning(notice)
-    error = st.session_state.pop("fishops_login_error", None)
-    if error:
-        st.error(error)
 
-    with st.form("fishops_login_form"):
-        email = st.text_input("Email", key=LOGIN_EMAIL_KEY, autocomplete="email")
-        password = st.text_input(
-            "Password",
-            type="password",
-            key=LOGIN_PASSWORD_KEY,
-            autocomplete="current-password",
-        )
-        submitted = st.form_submit_button("Sign in", type="primary")
-
-    st.caption("Sign-in is available only to approved FishOps administrators.")
-
-    with st.expander("Forgot your password?"):
-        with st.form("fishops_password_recovery_form"):
-            recovery_email = st.text_input(
-                "Administrator email",
-                key="fishops_recovery_email",
-                autocomplete="email",
-            )
-            recovery_submitted = st.form_submit_button("Send password reset link")
-
-        if recovery_submitted:
-            if not normalize_email(recovery_email):
-                st.error("Enter your administrator email address.")
-            else:
-                try:
-                    send_password_recovery_email(recovery_email)
-                except httpx.HTTPStatusError as error:
-                    if "rate limit" in error.response.text.lower():
-                        st.error(
-                            "The email service has reached its temporary sending "
-                            "limit. Wait before requesting another link, or ask "
-                            "the administrator to configure a custom email sender."
-                        )
-                    else:
-                        st.error(
-                            "Unable to send a password reset email right now. "
-                            "Please try again later."
-                        )
-                except httpx.HTTPError:
-                    st.error(
-                        "The authentication service is unavailable. Please try again later."
-                    )
-                except SupabaseAuthConfigurationError:
-                    st.error(
-                        "Authentication is not configured correctly. Contact the system administrator."
-                    )
-                else:
-                    st.success(
-                        "If this address is authorized, a password reset link "
-                        "will be sent shortly."
-                    )
-
-    if not submitted:
-        return
-
-    normalized_email = normalize_email(email)
-    administrator = get_authorized_administrator(normalized_email)
-    if not normalized_email or not password:
-        st.session_state["fishops_login_error"] = (
-            "Enter both your administrator email and password."
-        )
-    elif administrator is None:
-        _record_auth_event_or_warn(normalized_email, "login_denied")
-        st.session_state["fishops_denied_email"] = normalized_email
-    else:
-        try:
-            authenticated_session = sign_in_with_password(email, password)
-        except UnauthorizedAdministratorError:
-            _record_auth_event_or_warn(normalized_email, "login_denied")
-            st.session_state["fishops_denied_email"] = normalized_email
-        except UnconfirmedEmailError:
-            _record_auth_event_or_warn(
-                normalized_email, "login_failed", administrator.name
-            )
-            st.session_state["fishops_login_error"] = (
-                "This account's email must be confirmed in Supabase before signing in."
-            )
-        except AuthApiError:
-            _record_auth_event_or_warn(
-                normalized_email, "login_failed", administrator.name
-            )
-            st.session_state["fishops_login_error"] = (
-                "Sign-in failed. Check your email and password, then try again."
-            )
-        except httpx.HTTPError:
-            _record_auth_event_or_warn(
-                normalized_email, "login_failed", administrator.name
-            )
-            st.session_state["fishops_login_error"] = (
-                "The authentication service is unavailable. Please try again later."
-            )
-        except SupabaseAuthConfigurationError:
-            st.session_state["fishops_login_error"] = (
-                "Authentication is not configured correctly. Contact the system administrator."
-            )
-        except SupabaseAuthSessionError:
-            st.session_state["fishops_login_error"] = (
-                "A valid authentication session could not be established. Please try again."
+    if st.user.is_logged_in:
+        denied_email = st.session_state.get(DENIED_EMAIL_KEY)
+        if denied_email:
+            st.title("Access denied")
+            st.error(
+                "This email is not authorized to access FishOps Prospect Intelligence, "
+                "or its Auth0 email address is not verified."
             )
         else:
-            if not _record_auth_event(
-                authenticated_session.email,
-                "login_success",
-                administrator.name,
-            ):
-                try:
-                    sign_out_session(authenticated_session)
-                except (AuthApiError, httpx.HTTPError):
-                    st.session_state["fishops_login_notice"] = (
-                        "The sign-in session could not be revoked; contact the system administrator."
-                    )
-                st.session_state["fishops_login_error"] = (
-                    "Sign-in is unavailable because the login audit could not be written."
-                )
-            else:
-                st.session_state[AUTH_SESSION_KEY] = authenticated_session
-                st.session_state.pop("fishops_login_error", None)
+            st.error(
+                "FishOps could not record your sign-in. Access remains blocked until "
+                "the authentication audit is available."
+            )
+        if st.button("Sign out"):
+            st.session_state.pop(AUTH_AUDIT_IDENTITY_KEY, None)
+            st.session_state.pop(DENIED_IDENTITY_KEY, None)
+            st.session_state.pop(DENIED_EMAIL_KEY, None)
+            st.logout()
+        st.stop()
 
-    st.session_state["fishops_clear_login_password"] = True
-    st.rerun()
+    st.caption("Sign-in is available only to approved FishOps administrators.")
+    if st.button("Sign in with Auth0", type="primary"):
+        st.login("auth0")
 
 
-def _resolve_active_administrator() -> tuple[AuthenticatedSession, Administrator] | None:
-    authenticated_session = st.session_state.get(AUTH_SESSION_KEY)
-    if not isinstance(authenticated_session, AuthenticatedSession):
-        st.session_state.pop(AUTH_SESSION_KEY, None)
+def _resolve_active_administrator() -> Administrator | None:
+    if not st.user.is_logged_in:
         return None
 
-    if authenticated_session.expires_at <= int(time.time()) + 60:
-        try:
-            authenticated_session = refresh_authenticated_session(
-                authenticated_session.refresh_token
-            )
-        except (
-            AuthApiError,
-            httpx.HTTPError,
-            SupabaseAuthConfigurationError,
-            SupabaseAuthSessionError,
-            UnconfirmedEmailError,
-        ):
-            st.session_state.pop(AUTH_SESSION_KEY, None)
-            st.session_state["fishops_login_notice"] = (
-                "Your session could not be renewed. Please sign in again."
-            )
-            if not _record_auth_event(authenticated_session.email, "session_expired"):
-                st.session_state["fishops_login_notice"] += (
-                    " The session event could not be recorded."
-                )
-            return None
-        st.session_state[AUTH_SESSION_KEY] = authenticated_session
+    email_claim = st.user.get("email")
+    email = email_claim if isinstance(email_claim, str) else None
+    administrator = get_authenticated_administrator(
+        email,
+        st.user.get("email_verified"),
+    )
+    subject = st.user.get("sub")
+    identity = subject if isinstance(subject, str) and subject else normalize_email(email)
 
-    administrator = get_authorized_administrator(authenticated_session.email)
     if administrator is None:
-        st.session_state.pop(AUTH_SESSION_KEY, None)
-        _record_auth_event_or_warn(authenticated_session.email, "login_denied")
-        st.session_state["fishops_denied_email"] = authenticated_session.email
+        if not email:
+            st.session_state.pop(DENIED_EMAIL_KEY, None)
+        if email and identity and st.session_state.get(DENIED_IDENTITY_KEY) != identity:
+            _record_auth_event_or_warn(email, "login_denied")
+            st.session_state[DENIED_IDENTITY_KEY] = identity
+            st.session_state[DENIED_EMAIL_KEY] = email
         return None
-    return authenticated_session, administrator
+
+    st.session_state.pop(DENIED_IDENTITY_KEY, None)
+    st.session_state.pop(DENIED_EMAIL_KEY, None)
+    if st.session_state.get(AUTH_AUDIT_IDENTITY_KEY) != identity:
+        if not _record_auth_event(
+            administrator.email,
+            "login_success",
+            administrator.name,
+        ):
+            st.session_state["fishops_login_notice"] = (
+                "Sign-in is unavailable because the login audit could not be written."
+            )
+            return None
+        st.session_state[AUTH_AUDIT_IDENTITY_KEY] = identity
+
+    st.session_state.pop("fishops_login_notice", None)
+    return administrator
 
 
-_active_auth = _resolve_active_administrator()
-if _active_auth is None:
+if not is_auth0_configured():
+    st.error(
+        "Auth0 is not configured for Streamlit. Add the [auth] and [auth.auth0] "
+        "settings from .streamlit/secrets.toml.example to your local Streamlit "
+        "secrets or deployment secrets."
+    )
+    st.stop()
+
+
+_administrator = _resolve_active_administrator()
+if _administrator is None:
     _render_login_page()
     st.stop()
 
-_authenticated_session, _administrator = _active_auth
 ENGINE = _database_engine()
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
@@ -548,15 +235,8 @@ with st.sidebar.expander("Authentication history"):
 if st.sidebar.button("Log out"):
     if not _record_auth_event(_administrator.email, "logout", _administrator.name):
         st.sidebar.warning("Logout could not be recorded, but you are being signed out.")
-    try:
-        sign_out_session(_authenticated_session)
-    except (AuthApiError, httpx.HTTPError):
-        st.sidebar.warning(
-            "The Supabase session could not be revoked, but local access is being cleared."
-        )
-    finally:
-        st.session_state.pop(AUTH_SESSION_KEY, None)
-        st.rerun()
+    st.session_state.pop(AUTH_AUDIT_IDENTITY_KEY, None)
+    st.logout()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
