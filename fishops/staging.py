@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,7 +25,7 @@ from fishops.db.models import (
     Organization,
     SourceRecord,
 )
-from fishops.normalization import clean_text, normalize_business_name
+from fishops.normalization import normalize_business_name
 
 
 def _find_existing_organization(
@@ -51,6 +49,10 @@ def _create_organization_shell(candidate: CandidateRecord, session: Session) -> 
         business_type=candidate.business_type_hint,
         country_code=candidate.country_code,
         county=candidate.county_inferred or None,
+        city_town=candidate.city_town or None,
+        address_raw=candidate.address_raw or candidate.location_text_raw or None,
+        latitude=candidate.latitude,
+        longitude=candidate.longitude,
         website=candidate.website_raw or None,
         pipeline_stage="discovered",
         outreach_status="active",
@@ -132,6 +134,21 @@ def stage_candidates(
             org = _find_existing_organization(session, norm_name, candidate.country_code)
             if org is None:
                 org = _create_organization_shell(candidate, session)
+            elif org.verification_status != "verified":
+                if not org.business_type or org.business_type == "unknown":
+                    org.business_type = candidate.business_type_hint
+                if not org.county:
+                    org.county = candidate.county_inferred or None
+                if not org.city_town:
+                    org.city_town = candidate.city_town or None
+                if not org.address_raw:
+                    org.address_raw = candidate.address_raw or candidate.location_text_raw or None
+                if org.latitude is None:
+                    org.latitude = candidate.latitude
+                if org.longitude is None:
+                    org.longitude = candidate.longitude
+                if not org.website:
+                    org.website = candidate.website_raw or None
 
             payload_json = json.dumps(candidate.raw_payload, ensure_ascii=False) if candidate.raw_payload else None
 

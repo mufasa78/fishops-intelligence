@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fishops.collectors import (
+    BusinessListFishMerchantsCollector,
     GoAfricaCollector,
     KEFSCollector,
     OSMOverpassCollector,
@@ -30,6 +31,7 @@ from fishops.db.session import init_db, session_scope
 from fishops.staging import stage_candidates
 
 ADAPTER_MAP = {
+    "businesslist": BusinessListFishMerchantsCollector,
     "goafrica": GoAfricaCollector,
     "kefs": KEFSCollector,
     "osm": OSMOverpassCollector,

@@ -7,6 +7,7 @@ from fishops.collectors.base import (
     export_candidates_csv,
 )
 from fishops.collectors.csv_import import load_candidates_from_csv
+from fishops.collectors.businesslist import BusinessListFishMerchantsCollector
 from fishops.collectors.goafrica import GoAfricaCollector
 from fishops.collectors.kefs import KEFSCollector
 from fishops.collectors.osm_overpass import OSMOverpassCollector
@@ -15,6 +16,7 @@ from fishops.collectors.wikidata import WikidataCollector
 __all__ = [
     "BaseCollector",
     "CandidateRecord",
+    "BusinessListFishMerchantsCollector",
     "GoAfricaCollector",
     "KEFSCollector",
     "OSMOverpassCollector",

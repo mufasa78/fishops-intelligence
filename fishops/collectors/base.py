@@ -44,6 +44,8 @@ class CandidateRecord:
     profile_url: str = ""
     external_id: str = ""
     county_inferred: str = ""
+    city_town: str = ""
+    address_raw: str = ""
     location_text_raw: str = ""
     latitude: float | None = None
     longitude: float | None = None
@@ -60,6 +62,8 @@ class CandidateRecord:
         """Populate derived normalization hints without mutating raw fields."""
         self.business_name = clean_text(self.business_name)
         self.raw_text = clean_text(self.raw_text)
+        self.city_town = clean_text(self.city_town)
+        self.address_raw = clean_text(self.address_raw)
         self.location_text_raw = clean_text(self.location_text_raw)
 
         if not self.phone_raw and self.raw_text:

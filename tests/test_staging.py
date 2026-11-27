@@ -11,9 +11,10 @@ import collect
 from fishops.collectors.base import CandidateRecord
 from fishops.db.models import (
     CollectionRun,
-    Organization,
-    SourceRecord,
     ContactPoint,
+    Organization,
+    OutreachActivity,
+    SourceRecord,
 )
 from fishops.db.session import init_db, session_scope
 from fishops.staging import stage_candidates
@@ -97,6 +98,112 @@ class TestStaging:
         assert runs[0].adapter_name == "test_run"
         assert runs[0].status == "completed"
         assert runs[0].items_new == 1
+
+    def test_candidate_enriches_new_organization_with_location_and_coordinates(
+        self, engine
+    ):
+        candidate = _make_candidate(
+            city_town="Sagana",
+            address_raw="Main road",
+            latitude=0.0,
+            longitude=0.0,
+            website_raw="https://example.org",
+        )
+
+        with session_scope(engine) as session:
+            stage_candidates(session, [candidate])
+
+        with session_scope(engine) as session:
+            org = session.execute(select(Organization)).scalar_one()
+
+        assert org.city_town == "Sagana"
+        assert org.address_raw == "Main road"
+        assert org.latitude == 0.0
+        assert org.longitude == 0.0
+        assert org.website == "https://example.org"
+
+    def test_zero_coordinates_are_not_treated_as_missing(self, engine):
+        candidate = _make_candidate(latitude=1.5, longitude=37.0)
+        with session_scope(engine) as session:
+            session.add(
+                Organization(
+                    business_name=candidate.business_name,
+                    normalized_name="test fish farm",
+                    business_type="fish_farm",
+                    country_code="KE",
+                    latitude=0.0,
+                    longitude=0.0,
+                    pipeline_stage="discovered",
+                    outreach_status="active",
+                    verification_status="unverified",
+                )
+            )
+        with session_scope(engine) as session:
+            stage_candidates(session, [candidate])
+        with session_scope(engine) as session:
+            org = session.execute(select(Organization)).scalar_one()
+
+        assert org.latitude == 0.0
+        assert org.longitude == 0.0
+
+    def test_verified_organization_is_not_enriched_from_candidate(self, engine):
+        candidate = _make_candidate(
+            county_inferred="Kiambu",
+            website_raw="https://new.example.org",
+            latitude=1.5,
+        )
+        with session_scope(engine) as session:
+            session.add(
+                Organization(
+                    business_name=candidate.business_name,
+                    normalized_name="test fish farm",
+                    business_type="fish_farm",
+                    country_code="KE",
+                    county="Nairobi",
+                    website="https://verified.example.org",
+                    latitude=0.0,
+                    pipeline_stage="verified_prospect",
+                    outreach_status="active",
+                    verification_status="verified",
+                )
+            )
+        with session_scope(engine) as session:
+            stage_candidates(session, [candidate])
+        with session_scope(engine) as session:
+            org = session.execute(select(Organization)).scalar_one()
+
+        assert org.county == "Nairobi"
+        assert org.website == "https://verified.example.org"
+        assert org.latitude == 0.0
+
+
+def test_outreach_activity_is_persisted_for_organization(engine):
+    with session_scope(engine) as session:
+        org = Organization(
+            business_name="Follow-up Farm",
+            normalized_name="follow-up farm",
+            business_type="fish_farm",
+            country_code="KE",
+            pipeline_stage="discovered",
+            outreach_status="active",
+            verification_status="unverified",
+        )
+        session.add(org)
+        session.flush()
+        session.add(
+            OutreachActivity(
+                organization_id=org.id,
+                activity_type="call",
+                outcome="No answer",
+                next_step="Call again",
+                actor="admin@example.org",
+            )
+        )
+
+    with session_scope(engine) as session:
+        activity = session.execute(select(OutreachActivity)).scalar_one()
+        assert activity.organization.business_name == "Follow-up Farm"
+        assert activity.next_step == "Call again"
 
 
 class TestOrganizationModel:

@@ -89,6 +89,9 @@ class Organization(Base):
     source_records: Mapped[list[SourceRecord]] = relationship(
         back_populates="matched_organization"
     )
+    outreach_activities: Mapped[list[OutreachActivity]] = relationship(
+        back_populates="organization"
+    )
 
 
 class Person(Base):
@@ -278,6 +281,40 @@ class ContactPoint(Base):
     organization: Mapped[Organization | None] = relationship(back_populates="contact_points")
     person: Mapped[Person | None] = relationship(back_populates="contact_points")
     source_record: Mapped[SourceRecord | None] = relationship(back_populates="contact_points")
+
+
+class OutreachActivity(Base):
+    """Manual outreach and follow-up history for an organization."""
+
+    __tablename__ = "outreach_activities"
+    __table_args__ = {"schema": _SCHEMA}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{_SCHEMA}.organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    contact_point_id: Mapped[int | None] = mapped_column(
+        ForeignKey(f"{_SCHEMA}.contact_points.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    activity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_step: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_step_due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    actor: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    organization: Mapped[Organization] = relationship(
+        back_populates="outreach_activities"
+    )
+    contact_point: Mapped[ContactPoint | None] = relationship()
 
 
 class SuppressionEntry(Base):
